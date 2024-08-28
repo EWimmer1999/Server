@@ -131,3 +131,6 @@ dist
 
 # activity log
 .log
+
+# database
+.sqlite

@@ -1,4 +1,4 @@
-require('dotenv').config(); 
+require('dotenv').config();
 
 const express = require('express');
 const jwt = require('jsonwebtoken');
@@ -7,10 +7,15 @@ const bodyParser = require('body-parser');
 const cors = require('cors');
 const fs = require('fs');
 const nodemailer = require('nodemailer');
-const { User } = require('./database');
-const { Survey } = require('./database');
-const { Question } = require('./database');  // Stell sicher, dass dies vorhanden ist
 
+const { Sequelize, DataTypes } = require('sequelize');
+const sequelize = new Sequelize({
+  dialect: 'sqlite',
+  storage: 'database.sqlite',
+  logging: console.log
+});
+
+const { User, Tipps, Survey, Question, SurveyResponse, Answer, DiaryEntry } = require('./database');
 
 const app = express();
 const port = process.env.PORT;
@@ -19,35 +24,37 @@ app.use(cors());
 app.use(bodyParser.json());
 app.use(express.static('public'));
 
-
 const logFilePath = 'activity.log';
 
-// Funktion zum Erstellen eines JWT
 const generateToken = (user) => {
-  return jwt.sign({ id: user.id, username: user.username }, process.env.JWT_SECRET_KEY, { expiresIn: '1h' });
+  const payload = {
+    id: user.id,
+    username: user.username,
+    issuedAt: Date.now(),
+  };
+
+  return jwt.sign(payload, process.env.JWT_SECRET_KEY, { expiresIn: '1h' });
 };
 
-// Middleware zum Überprüfen des JWTs
+
 const authenticateToken = (req, res, next) => {
   const token = req.headers['authorization']?.split(' ')[1];
 
   if (!token) return res.sendStatus(401);
 
-  jwt.verify(token, 'secret-key', (err, user) => {
+  jwt.verify(token, process.env.JWT_SECRET_KEY, (err, user) => {
     if (err) return res.sendStatus(403);
     req.user = user;
     next();
   });
 };
 
-// Aktivität protokollieren
 const logActivity = (message) => {
   const logMessage = `${new Date().toISOString()} - ${message}\n`;
   fs.appendFileSync(logFilePath, logMessage);
   console.log(logMessage);
 };
 
-// E-Mail-Transporter einrichten
 const transporter = nodemailer.createTransport({
   service: process.env.EMAIL_SERVICE,
   host: process.env.EMAIL_HOST,
@@ -59,7 +66,6 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-// Endpunkt zum Zurücksetzen des Passworts
 app.post('/reset-password-request', async (req, res) => {
   const { email } = req.body;
   logActivity('Received password request');
@@ -74,12 +80,11 @@ app.post('/reset-password-request', async (req, res) => {
       return res.status(404).json({ message: 'Email not found' });
     }
 
-    const resetToken = jwt.sign({ id: user.id, email: user.email }, 'secret-key', { expiresIn: '1h' });
+    const resetToken = generateToken(user);
     const resetLink = `http://192.168.0.77:3000/reset-password.html?token=${resetToken}`;
 
-
     const mailOptions = {
-      from: 'manageyourstressapp@gmail.com', // Ersetze durch deine E-Mail
+      from: process.env.EMAIL_USER,
       to: user.email,
       subject: 'Password Reset',
       text: `Click the following link to reset your password: ${resetLink}`,
@@ -108,7 +113,7 @@ app.post('/reset-password', async (req, res) => {
   }
 
   try {
-    const decoded = jwt.verify(token, 'secret-key');
+    const decoded = jwt.verify(token, process.env.JWT_SECRET_KEY);
     const user = await User.findOne({ where: { id: decoded.id } });
 
     if (!user) {
@@ -126,6 +131,7 @@ app.post('/reset-password', async (req, res) => {
     res.status(500).json({ message: 'Failed to reset password' });
   }
 });
+
 
 app.post('/register', async (req, res) => {
   const { username, email, password } = req.body;
@@ -157,7 +163,6 @@ app.post('/register', async (req, res) => {
   }
 });
 
-// Login eines Benutzers
 app.post('/login', async (req, res) => {
   const { username, password } = req.body;
   try {
@@ -194,7 +199,6 @@ app.get('/users', async (req, res) => {
   }
 });
 
-// Endpunkt zum Abrufen des Aktivitätsprotokolls
 app.get('/activity-log', (req, res) => {
   if (fs.existsSync(logFilePath)) {
     const logs = fs.readFileSync(logFilePath, 'utf8');
@@ -204,86 +208,281 @@ app.get('/activity-log', (req, res) => {
   }
 });
 
-// Route für Root-Pfad
 app.get('/', (req, res) => {
   res.send('Hello World!');
 });
 
 app.get('/surveys', authenticateToken, async (req, res) => {
   try {
+    const userId = req.user.id; // Hole die User-ID aus dem Token
+
     const surveys = await Survey.findAll({
       include: [{
         model: Question,
         as: 'questions'
       }]
     });
-    res.json(surveys);
+
+    // Finde alle Umfragen, die der Benutzer bereits beantwortet hat
+    const completedSurveys = await SurveyResponse.findAll({
+      where: { userId },
+      attributes: ['surveyId']
+    });
+
+    // Konvertiere die completedSurveys in ein Set für einfacheren Zugriff
+    const completedSurveyIds = new Set(completedSurveys.map(response => response.surveyId));
+
+    // Füge die Information hinzu, ob der Benutzer die Umfrage bereits gemacht hat
+    const surveysWithCompletionInfo = surveys.map(survey => ({
+      ...survey.toJSON(), // Konvertiere das Survey-Objekt in JSON
+      completed: completedSurveyIds.has(survey.id) // Überprüfe, ob die Umfrage bereits abgeschlossen wurde
+    }));
+
+    res.json(surveysWithCompletionInfo);
   } catch (error) {
     console.error('Error fetching surveys:', error);
-    res.status(500).json({ 
-      message: 'Failed to fetch surveys', 
+    res.status(500).json({
+      message: 'Failed to fetch surveys',
       error: error.message,
-      stack: error.stack // Für detailliertere Fehleranalyse
+      stack: error.stack
     });
   }
 });
 
-
-
-
 app.post('/surveys', authenticateToken, async (req, res) => {
   const { title, description, questions } = req.body;
 
-  if (!title || !questions) {
-    return res.status(400).json({ message: 'Title and questions are required' });
+  if (!title || !questions || questions.length === 0) {
+    return res.status(400).json({ message: 'Title and at least one question are required' });
   }
 
+  const transaction = await sequelize.transaction();
+
   try {
-    const survey = await Survey.create({ title, description });
-    await Promise.all(questions.map(question =>
-      Question.create({
-        ...question,
-        surveyId: survey.id
-      })
-    ));
+    const survey = await Survey.create({ title, description }, { transaction });
+
+    await Promise.all(
+      questions.map(question =>
+        Question.create({
+          text: question.text,
+          type: question.type,
+          options: question.options || null,
+          surveyId: survey.id
+        }, { transaction })
+      )
+    );
+
+    await transaction.commit();
     res.status(201).json(survey);
   } catch (error) {
+    await transaction.rollback();
     console.error('Error creating survey:', error);
     res.status(500).json({ message: 'Failed to create survey' });
   }
 });
 
-
-app.post('/submit-survey', async (req, res) => {
+app.get('/tipps', authenticateToken, async (req, res) => {
   try {
-    const { userId, surveyId, responses } = req.body;
+    const tipps = await Tipps.findAll();
+    console.log('Abgerufene Tipps:', tipps);
+    res.json(tipps);
+  } catch (error) {
+    console.error('Error fetching tipps:', error);
+    console.error('Fehler beim Abrufen der Tipps:', error.message, error.stack);
+    res.status(500).json({
+      message: 'Failed to fetch surveys',
+      error: error.message,
+      stack: error.stack
+    });
+  }
+});
 
-    // Validierungen
-    if (!userId || !surveyId || !responses) {
-      return res.status(400).json({ message: 'Missing required fields' });
+
+app.post('/update-token', authenticateToken, async (req, res) => {
+
+  const newToken = generateToken(req.user);
+  res.status(200).json({ token: newToken });
+});
+
+
+app.post('/submit-survey', authenticateToken, async (req, res) => {
+  try {
+    const { surveyId, responses, noiseLevel, completed } = req.body;
+    const userId = req.user.id;
+
+    console.log('Empfangene Daten:', req.body); 
+
+    if (!surveyId || !responses || responses.length === 0 || noiseLevel === undefined) {
+      return res.status(400).json({ message: 'SurveyId, responses, and noiseLevel are required' });
     }
 
-    // Überprüfe, ob die Umfrage existiert
     const survey = await Survey.findByPk(surveyId);
     if (!survey) {
       return res.status(404).json({ message: 'Survey not found' });
     }
 
-    // Speichern der Antworten
-    const surveyResponse = await SurveyResponse.create({
-      userId,
-      surveyId,
-      response: responses // Hier wird das Array von Antworten gespeichert
-    });
+    const transaction = await sequelize.transaction();
 
-    res.status(201).json({ message: 'Responses saved successfully', surveyResponse });
+    try {
+      const surveyResponse = await SurveyResponse.create(
+        { userId, surveyId, noiseLevel, completed }, // Speichern der Geräuschdaten
+        { transaction }
+      );
+
+      await Promise.all(
+        responses.map(response =>
+          Answer.create({
+            response: response.answer,
+            questionId: response.questionId,
+            surveyResponseId: surveyResponse.id
+          }, { transaction })
+        )
+      );
+
+      await transaction.commit();
+      res.status(201).json({ message: 'Responses and noise data saved successfully' });
+    } catch (error) {
+      await transaction.rollback();
+      throw error;
+    }
+
   } catch (error) {
     console.error('Error saving survey responses:', error);
     res.status(500).json({ message: 'Error saving responses' });
   }
 });
 
+app.get('/user-surveys', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
 
+    // Finde alle Umfragen, die der Benutzer bereits beantwortet hat
+    const surveyResponses = await SurveyResponse.findAll({
+      where: { userId, completed: true }, // Nur erledigte Umfragen
+      include: [
+        {
+          model: Survey,
+          include: [
+            {
+              model: Question,
+              as: 'questions', 
+            }
+          ]
+        },
+        {
+          model: Answer,
+        }
+      ]
+    });
+
+    const result = surveyResponses.map(response => {
+      const dataValues = response.dataValues;
+
+      if (!dataValues.Survey) {
+        console.error('Survey nicht definiert für die Antwort:', response);
+        return null; 
+      }
+
+      const questions = dataValues.Survey.questions.map(question => {
+        const answer = dataValues.Answers.find(answer => answer.questionId === question.id)?.response || null;
+
+        return {
+          questionId: question.id,
+          questionText: question.text,
+          questionType: question.type,
+          answer: answer,
+        };
+      });
+
+      return {
+        surveyId: dataValues.Survey.id,
+        surveyTitle: dataValues.Survey.title,
+        surveyDescription: dataValues.Survey.description,
+        completed: dataValues.completed,
+        noiseLevel: dataValues.noiseLevel,
+        questions: questions
+      };
+    }).filter(Boolean);
+
+    console.log('Gefundene abgeschlossene Umfragen:', result);
+    res.json(result);
+  } catch (error) {
+    console.error('Fehler beim Abrufen der Benutzersummary:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+
+app.post('/diary-entry', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const { entryId, date, time, foodCategory, information, notes, stressLevel, activities, deleted } = req.body;
+
+  if (!entryId || !date || !time) {
+    return res.status(400).json({ message: 'Entry ID, date, and time are required' });
+  }
+
+  try {
+    const existingEntry = await DiaryEntry.findOne({ where: { userId, entryId } });
+
+    if (deleted) {
+      // Wenn das deleted-Flag auf true gesetzt ist, entferne den Eintrag
+      if (existingEntry) {
+        await existingEntry.destroy();
+        return res.status(200).json({ message: 'Diary entry deleted successfully' });
+      } else {
+        return res.status(404).json({ message: 'Diary entry not found for deletion' });
+      }
+    } 
+
+    // Wenn das deleted-Flag nicht gesetzt ist, speichere den Eintrag (erstellen oder aktualisieren)
+    if (existingEntry) {
+      // Aktualisiere den bestehenden Eintrag
+      existingEntry.date = date;
+      existingEntry.time = time;
+      existingEntry.foodCategory = foodCategory;
+      existingEntry.information = information;
+      existingEntry.notes = notes;
+      existingEntry.stressLevel = stressLevel;
+      existingEntry.activities = activities;
+      await existingEntry.save();
+      res.status(200).json({ message: 'Diary entry updated successfully' });
+    } else {
+      // Erstelle einen neuen Eintrag
+      await DiaryEntry.create({
+        entryId,
+        userId,
+        date,
+        time,
+        foodCategory,
+        information,
+        notes,
+        stressLevel,
+        activities
+      });
+      res.status(201).json({ message: 'Diary entry created successfully' });
+    }
+  } catch (error) {
+    console.error('Error saving diary entry:', error);
+    res.status(500).json({ message: 'Failed to save diary entry' });
+  }
+});
+
+app.get('/diary-entries', authenticateToken, async (req, res) => {
+  const userId = req.user.id; 
+
+  try {
+   
+    const diaryEntries = await DiaryEntry.findAll({
+      where: { userId }, 
+      order: [['date', 'DESC'], ['time', 'DESC']]
+    });
+
+    res.json(diaryEntries);
+  } catch (error) {
+    console.error('Fehler beim Abrufen der Tagebucheinträge:', error);
+    res.status(500).json({ message: 'Fehler beim Abrufen der Tagebucheinträge' });
+  }
+});
 
 app.listen(port, '0.0.0.0', () => {
   console.log(`Server running at http://localhost:${port}`);

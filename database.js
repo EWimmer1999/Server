@@ -193,6 +193,19 @@ const DiaryEntry = sequelize.define('DiaryEntry', {
   }
 });
 
+const Settings = sequelize.define('Settings', {
+  userId: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    unique: true
+  },
+  settings: {
+    type: DataTypes.JSON,
+    allowNull: false
+  }
+});
+
+module.exports = Settings;
 
 User.hasMany(DiaryEntry, { foreignKey: 'userId' });
 DiaryEntry.belongsTo(User, { foreignKey: 'userId' });
@@ -221,5 +234,5 @@ sequelize.sync()
   });
 
 module.exports = {
-  User, Tipps, Survey, Question, SurveyResponse, Answer, DiaryEntry
+  User, Tipps, Survey, Question, SurveyResponse, Answer, DiaryEntry, Settings
 };

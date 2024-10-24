@@ -15,7 +15,7 @@ const sequelize = new Sequelize({
   logging: console.log
 });
 
-const { User, Tipps, Survey, Question, SurveyResponse, Answer, DiaryEntry } = require('./database');
+const { User, Tipps, Survey, Question, SurveyResponse, Answer, DiaryEntry, Settings } = require('./database');
 
 const app = express();
 const port = process.env.PORT;
@@ -425,7 +425,6 @@ app.post('/diary-entry', authenticateToken, async (req, res) => {
     const existingEntry = await DiaryEntry.findOne({ where: { userId, entryId } });
 
     if (deleted) {
-      // Wenn das deleted-Flag auf true gesetzt ist, entferne den Eintrag
       if (existingEntry) {
         await existingEntry.destroy();
         return res.status(200).json({ message: 'Diary entry deleted successfully' });
@@ -434,9 +433,7 @@ app.post('/diary-entry', authenticateToken, async (req, res) => {
       }
     } 
 
-    // Wenn das deleted-Flag nicht gesetzt ist, speichere den Eintrag (erstellen oder aktualisieren)
     if (existingEntry) {
-      // Aktualisiere den bestehenden Eintrag
       existingEntry.date = date;
       existingEntry.time = time;
       existingEntry.foodCategory = foodCategory;
@@ -515,7 +512,47 @@ app.post('/change-password', authenticateToken, async (req, res) => {
   }
 });
 
+app.post('/save-settings', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const { settings } = req.body;
 
+  if (!settings) {
+    return res.status(400).json({ message: 'Einstellungen sind erforderlich' });
+  }
+
+  try {
+    let userSettings = await Settings.findOne({ where: { userId } });
+
+    if (userSettings) {
+      userSettings.settings = settings;
+      await userSettings.save();
+      res.status(200).json({ message: 'Einstellungen erfolgreich aktualisiert' });
+    } else {
+      await Settings.create({ userId, settings });
+      res.status(201).json({ message: 'Einstellungen erfolgreich gespeichert' });
+    }
+  } catch (error) {
+    console.error('Fehler beim Speichern der Einstellungen:', error);
+    res.status(500).json({ message: 'Fehler beim Speichern der Einstellungen' });
+  }
+});
+
+app.get('/get-settings', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+
+  try {
+    const userSettings = await Settings.findOne({ where: { userId } });
+
+    if (userSettings) {
+      res.status(200).json(userSettings.settings);
+    } else {
+      res.status(404).json({ message: 'Keine Einstellungen gefunden' });
+    }
+  } catch (error) {
+    console.error('Fehler beim Abrufen der Einstellungen:', error);
+    res.status(500).json({ message: 'Fehler beim Abrufen der Einstellungen' });
+  }
+});
 
 app.listen(port, '0.0.0.0', () => {
   console.log(`Server running at http://localhost:${port}`);

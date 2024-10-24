@@ -104,7 +104,7 @@ app.post('/reset-password-request', async (req, res) => {
   }
 });
 
-// Endpunkt zum Setzen des neuen Passworts
+
 app.post('/reset-password', async (req, res) => {
   const { password, token } = req.body;
 
@@ -483,6 +483,39 @@ app.get('/diary-entries', authenticateToken, async (req, res) => {
     res.status(500).json({ message: 'Fehler beim Abrufen der Tagebucheinträge' });
   }
 });
+
+app.post('/change-password', authenticateToken, async (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+  const userId = req.user.id;
+
+  if (!currentPassword || !newPassword) {
+    return res.status(400).json({ message: 'Aktuelles Passwort und neues Passwort sind erforderlich' });
+  }
+
+  try {
+    const user = await User.findOne({ where: { id: userId } });
+    if (!user) {
+      return res.status(404).json({ message: 'Could not find user!' });
+    }
+
+    const passwordMatch = await bcrypt.compare(currentPassword, user.password);
+    if (!passwordMatch) {
+      return res.status(401).json({ message: 'Current password is wrong!' });
+    }
+
+    const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+    user.password = hashedNewPassword;
+    await user.save();
+
+    logActivity(`User ${user.username} has changed their password`);
+    res.status(200).json({ message: 'Password changed successfully' });
+  } catch (error) {
+    console.error('Error while changing the password:', error);
+    res.status(500).json({ message: 'Error while changing the password' });
+  }
+});
+
+
 
 app.listen(port, '0.0.0.0', () => {
   console.log(`Server running at http://localhost:${port}`);

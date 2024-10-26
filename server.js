@@ -153,8 +153,16 @@ app.post('/register', async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const user = await User.create({ username, email, password: hashedPassword });
-    const token = generateToken(user);
 
+    const defaultSettings = {
+      darkMode: false,
+      noiseData: false,
+      stepData: false,
+    
+    };
+    await Settings.create({ userId: user.id, settings: defaultSettings });
+
+    const token = generateToken(user);
     logActivity(`User registered: ${username}`);
     res.status(201).json({ token });
   } catch (error) {
@@ -172,23 +180,23 @@ app.post('/login', async (req, res) => {
     }
     const token = generateToken(user);
     logActivity(`User logged in: ${username}`);
-    res.json({ token });
+    res.json({ 
+      token,
+      demographic: user.demographic 
+    });
   } catch (error) {
     res.status(500).send('Login failed');
   }
 });
 
-// Authentication eines Benutzers
 app.post('/authenticate', authenticateToken, (req, res) => {
   res.json({ valid: true });
 });
 
-// Geschützter Endpunkt
 app.get('/protected', authenticateToken, (req, res) => {
   res.send(`Hello ${req.user.username}, this is a protected route!`);
 });
 
-// Endpunkt zum Abrufen aller Benutzer
 app.get('/users', async (req, res) => {
   try {
     const users = await User.findAll({ attributes: ['id', 'username'] });
@@ -208,10 +216,6 @@ app.get('/activity-log', (req, res) => {
   }
 });
 
-app.get('/', (req, res) => {
-  res.send('Hello World!');
-});
-
 app.get('/surveys', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id; // Hole die User-ID aus dem Token
@@ -223,19 +227,16 @@ app.get('/surveys', authenticateToken, async (req, res) => {
       }]
     });
 
-    // Finde alle Umfragen, die der Benutzer bereits beantwortet hat
     const completedSurveys = await SurveyResponse.findAll({
       where: { userId },
       attributes: ['surveyId']
     });
 
-    // Konvertiere die completedSurveys in ein Set für einfacheren Zugriff
     const completedSurveyIds = new Set(completedSurveys.map(response => response.surveyId));
 
-    // Füge die Information hinzu, ob der Benutzer die Umfrage bereits gemacht hat
     const surveysWithCompletionInfo = surveys.map(survey => ({
-      ...survey.toJSON(), // Konvertiere das Survey-Objekt in JSON
-      completed: completedSurveyIds.has(survey.id) // Überprüfe, ob die Umfrage bereits abgeschlossen wurde
+      ...survey.toJSON(),
+      completed: completedSurveyIds.has(survey.id) 
     }));
 
     res.json(surveysWithCompletionInfo);
@@ -312,7 +313,7 @@ app.post('/submit-survey', authenticateToken, async (req, res) => {
 
     console.log('Empfangene Daten:', req.body); 
 
-    if (!surveyId || !responses || responses.length === 0 || noiseLevel === undefined) {
+    if (!surveyId || !responses || responses.length === 0) {
       return res.status(400).json({ message: 'SurveyId, responses, and noiseLevel are required' });
     }
 
@@ -324,11 +325,24 @@ app.post('/submit-survey', authenticateToken, async (req, res) => {
     const transaction = await sequelize.transaction();
 
     try {
+      // Überprüfen, ob bereits eine Antwort für den Benutzer und den Fragebogen existiert
+      const existingResponse = await SurveyResponse.findOne({
+        where: { userId, surveyId }
+      });
+
+      // Falls vorhanden, bestehende Antwort und zugehörige Antworten löschen
+      if (existingResponse) {
+        await Answer.destroy({ where: { surveyResponseId: existingResponse.id }, transaction });
+        await existingResponse.destroy({ transaction });
+      }
+
+      // Neue Antwort erstellen
       const surveyResponse = await SurveyResponse.create(
-        { userId, surveyId, noiseLevel, completed }, // Speichern der Geräuschdaten
+        { userId, surveyId, noiseLevel, completed }, 
         { transaction }
       );
 
+      // Antworten speichern
       await Promise.all(
         responses.map(response =>
           Answer.create({
@@ -338,6 +352,15 @@ app.post('/submit-survey', authenticateToken, async (req, res) => {
           }, { transaction })
         )
       );
+
+      // Demographic-Flag für den Benutzer setzen, falls es sich um einen demografischen Fragebogen handelt
+      if (survey.demographic) {
+        const user = await User.findByPk(userId);
+        if (user) {
+          user.demographic = true;
+          await user.save({ transaction });
+        }
+      }
 
       await transaction.commit();
       res.status(201).json({ message: 'Responses and noise data saved successfully' });
@@ -351,6 +374,8 @@ app.post('/submit-survey', authenticateToken, async (req, res) => {
     res.status(500).json({ message: 'Error saving responses' });
   }
 });
+
+
 
 app.get('/user-surveys', authenticateToken, async (req, res) => {
   try {
@@ -444,7 +469,6 @@ app.post('/diary-entry', authenticateToken, async (req, res) => {
       await existingEntry.save();
       res.status(200).json({ message: 'Diary entry updated successfully' });
     } else {
-      // Erstelle einen neuen Eintrag
       await DiaryEntry.create({
         entryId,
         userId,
@@ -557,3 +581,39 @@ app.get('/get-settings', authenticateToken, async (req, res) => {
 app.listen(port, '0.0.0.0', () => {
   console.log(`Server running at http://localhost:${port}`);
 });
+
+
+async function createDemographicSurvey() {
+  const survey = await Survey.create({
+    title: "Demografischer Fragebogen",
+    description: "Bitte füllen Sie diesen Fragebogen aus.",
+    demographic: true
+  });
+
+  const questions = [
+    {
+      text: "Wie alt sind Sie?",
+      type: "single-choice",
+      options: ["Unter 18", "18-24", "25-34", "35-44", "45-54", "55-64", "65 oder älter"]
+    },
+    {
+      text: "Welcher Geschlecht sind Sie?",
+      type: "single-choice",
+      options: ["Männlich", "Weiblich", "Divers"]
+    },
+    {
+      text: "Familienstand",
+      type: "single-choice",
+      options: ["Single", "Verheiratet", "Geschieden", "Witwer/Witwe"]
+    }
+  ];
+
+  for (const question of questions) {
+    await Question.create({
+      ...question,
+      surveyId: survey.id 
+    });
+  }
+}
+
+createDemographicSurvey();

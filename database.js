@@ -25,6 +25,10 @@ const User = sequelize.define('User', {
   password: {
     type: DataTypes.STRING,
     allowNull: false
+  },
+  demographic: { 
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
   }
 });
 
@@ -65,6 +69,10 @@ const Survey = sequelize.define('Survey', {
   description: {
     type: DataTypes.TEXT,
     allowNull: true
+  },
+  demographic: { 
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
   }
 });
 
@@ -113,7 +121,7 @@ const SurveyResponse = sequelize.define('SurveyResponse', {
   },
   noiseLevel: {
     type: DataTypes.FLOAT,
-    allowNull: false
+    allowNull: true
   },
   completed: { 
     type: DataTypes.BOOLEAN,

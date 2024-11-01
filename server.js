@@ -33,7 +33,7 @@ const generateToken = (user) => {
     issuedAt: Date.now(),
   };
 
-  return jwt.sign(payload, process.env.JWT_SECRET_KEY, { expiresIn: '1h' });
+  return jwt.sign(payload, process.env.JWT_SECRET_KEY, { expiresIn: '72h' });
 };
 
 
@@ -81,7 +81,7 @@ app.post('/reset-password-request', async (req, res) => {
     }
 
     const resetToken = generateToken(user);
-    const resetLink = `http://192.168.0.77:3000/reset-password.html?token=${resetToken}`;
+    const resetLink = `${process.env.URL}/reset-password.html?token=${resetToken}`;
 
     const mailOptions = {
       from: process.env.EMAIL_USER,
@@ -218,7 +218,7 @@ app.get('/activity-log', (req, res) => {
 
 app.get('/surveys', authenticateToken, async (req, res) => {
   try {
-    const userId = req.user.id; // Hole die User-ID aus dem Token
+    const userId = req.user.id; 
 
     const surveys = await Survey.findAll({
       include: [{
@@ -325,24 +325,21 @@ app.post('/submit-survey', authenticateToken, async (req, res) => {
     const transaction = await sequelize.transaction();
 
     try {
-      // Überprüfen, ob bereits eine Antwort für den Benutzer und den Fragebogen existiert
       const existingResponse = await SurveyResponse.findOne({
         where: { userId, surveyId }
       });
 
-      // Falls vorhanden, bestehende Antwort und zugehörige Antworten löschen
       if (existingResponse) {
         await Answer.destroy({ where: { surveyResponseId: existingResponse.id }, transaction });
         await existingResponse.destroy({ transaction });
       }
 
-      // Neue Antwort erstellen
       const surveyResponse = await SurveyResponse.create(
         { userId, surveyId, noiseLevel, completed }, 
         { transaction }
       );
 
-      // Antworten speichern
+    
       await Promise.all(
         responses.map(response =>
           Answer.create({
@@ -353,7 +350,6 @@ app.post('/submit-survey', authenticateToken, async (req, res) => {
         )
       );
 
-      // Demographic-Flag für den Benutzer setzen, falls es sich um einen demografischen Fragebogen handelt
       if (survey.demographic) {
         const user = await User.findByPk(userId);
         if (user) {
@@ -381,9 +377,9 @@ app.get('/user-surveys', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
 
-    // Finde alle Umfragen, die der Benutzer bereits beantwortet hat
+  
     const surveyResponses = await SurveyResponse.findAll({
-      where: { userId, completed: true }, // Nur erledigte Umfragen
+      where: { userId, completed: true },
       include: [
         {
           model: Survey,
@@ -583,37 +579,3 @@ app.listen(port, '0.0.0.0', () => {
 });
 
 
-async function createDemographicSurvey() {
-  const survey = await Survey.create({
-    title: "Demografischer Fragebogen",
-    description: "Bitte füllen Sie diesen Fragebogen aus.",
-    demographic: true
-  });
-
-  const questions = [
-    {
-      text: "Wie alt sind Sie?",
-      type: "single-choice",
-      options: ["Unter 18", "18-24", "25-34", "35-44", "45-54", "55-64", "65 oder älter"]
-    },
-    {
-      text: "Welcher Geschlecht sind Sie?",
-      type: "single-choice",
-      options: ["Männlich", "Weiblich", "Divers"]
-    },
-    {
-      text: "Familienstand",
-      type: "single-choice",
-      options: ["Single", "Verheiratet", "Geschieden", "Witwer/Witwe"]
-    }
-  ];
-
-  for (const question of questions) {
-    await Question.create({
-      ...question,
-      surveyId: survey.id 
-    });
-  }
-}
-
-createDemographicSurvey();
